@@ -10,7 +10,7 @@ Claude Code 的 skill 和 mod。
 
 `/carry [行数] [备注]` 把当前工作带到新会话：
 
-1. 把对话导出到 `~/.claude/carry/<session-id>.txt`。
+1. 把对话导出到 `~/.claude/carry/<session-id>-<时间戳>.txt`（每次一个新文件，因为 `/export` 不覆盖已有文件）。
 2. 运行 `/clear`。
 3. 让新会话读导出文件的末尾（默认 400 行），然后继续。
 

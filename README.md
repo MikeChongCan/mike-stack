@@ -10,7 +10,7 @@ Skills and mods for Claude Code.
 
 `/carry [lines] [note]` moves your work into a new session:
 
-1. Exports the conversation to `~/.claude/carry/<session-id>.txt`.
+1. Exports the conversation to `~/.claude/carry/<session-id>-<timestamp>.txt` (a new file each time, because `/export` does not overwrite a file).
 2. Runs `/clear`.
 3. Tells the new session to read the end of the export (default 400 lines) and continue.
 

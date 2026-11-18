@@ -74,10 +74,12 @@ async function carry($: EngineInterface, args: string) {
   // Windows sets USERPROFILE, not HOME (only its sshd sets HOME).
   const home = (await $.env.get('HOME')) || (await $.env.get('USERPROFILE'))
   const id = await $.session.id()
-  const path = `${home}/.claude/carry/${id}.txt`
+  const dir = `${home}/.claude/carry`
+  // /export refuses an existing file, so each run gets its own name (a second /carry in one session too).
+  const path = `${dir}/${id}-${Date.now()}.txt`
 
-  // An empty placeholder creates the folder; a non-empty file afterwards proves /export wrote it.
-  await $.fs.write(path, '')
+  // A marker file creates the folder; a non-empty export afterwards proves /export wrote it.
+  await $.fs.write(`${dir}/.keep`, '')
   await $.command.run({ command: 'export', args: path })
   const exported = (await $.fs.exists(path)) && (await $.fs.stat(path)).size > 0
   if (!exported) {
