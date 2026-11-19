@@ -1,5 +1,5 @@
 import { expect, test } from 'claude-code/testing'
-import { buildPrompt, countLines, readSteps } from './register'
+import { buildPrompt, countLines, lastTitle, readSteps, sessionTitle } from './register'
 
 test('steps double and stop at the budget', () => {
   expect(readSteps(400, 0)).toEqual(['the last 50 lines', 'the 50 lines above that', 'the 100 lines above that', 'the 200 lines above that'])
@@ -49,4 +49,64 @@ test('countLines keeps trailing blank lines', () => {
   expect(countLines('a\nb')).toBe(2)
   expect(countLines('a\n\n\n')).toBe(3)
   expect(countLines('')).toBe(0)
+})
+
+test('lastTitle takes the last /rename, keeps quotes and unicode', () => {
+  const rec = (t: string) => JSON.stringify({ type: 'custom-title', customTitle: t, sessionId: 'x' })
+  expect(lastTitle(`${rec('old')}\n{"type":"user"}\n${rec('[rstar] "infoflow" v6 中文')}\n`)).toBe('[rstar] "infoflow" v6 中文')
+  expect(lastTitle('{"type":"user","message":"hi"}\n')).toBeUndefined()
+  expect(lastTitle('')).toBeUndefined()
+  expect(lastTitle(rec('   '))).toBe('')
+  expect(lastTitle(`${rec('old')}\n${rec('')}\n`)).toBe('')
+})
+
+test('lastTitle skips a record cut at a range edge', () => {
+  expect(lastTitle('{"type":"custom-title","customTitle":"ok"}\n{"type":"custom-title","customTitle":"cut')).toBe('ok')
+})
+
+test('lastTitle ignores the same keys nested in a tool input', () => {
+  const nested = JSON.stringify({
+    type: 'assistant',
+    message: { content: [{ type: 'tool_use', input: { type: 'custom-title', customTitle: 'fake' } }] },
+  })
+  expect(lastTitle(nested)).toBeUndefined()
+  const real = JSON.stringify({ type: 'custom-title', customTitle: 'real' })
+  expect(lastTitle(`${real}\n${nested}\n`)).toBe('real')
+})
+
+// A fake $ over one in-memory transcript: enough of session.info and fs for sessionTitle.
+function fake(text: string, reads: Array<[number, number]> = []) {
+  return {
+    session: { info: async () => ({ transcriptPath: '/t.jsonl' }) },
+    fs: {
+      exists: async () => true,
+      stat: async () => ({ size: text.length }),
+      read: async (_: string, o: { offset: number; length: number }) => {
+        reads.push([o.offset, o.length])
+        return text.slice(o.offset, o.offset + o.length)
+      },
+    },
+  } as unknown as Parameters<typeof sessionTitle>[0]
+}
+
+test('sessionTitle reads from the end and stops at the first range with a title', async () => {
+  const pad = (n: number) => `{"type":"user","p":"${'x'.repeat(n)}"}\n`
+  const title = (t: string) => `${JSON.stringify({ type: 'custom-title', customTitle: t })}\n`
+  const MiB = 1024 * 1024
+  const reads: Array<[number, number]> = []
+  const text = title('first') + pad(6 * MiB) + title('last') + pad(10)
+  expect(await sessionTitle(fake(text, reads))).toBe('last')
+  expect(reads.length).toBe(1)
+  expect(await sessionTitle(fake(title('only') + pad(9 * MiB)))).toBe('only')
+  expect(await sessionTitle(fake(pad(5 * MiB)))).toBeUndefined()
+  expect(await sessionTitle(fake(title('old') + pad(10) + title(' ')))).toBeUndefined()
+})
+
+test('sessionTitle finds a title cut by the range edge', async () => {
+  const MiB = 1024 * 1024
+  const rec = `${JSON.stringify({ type: 'custom-title', customTitle: 'edge' })}\n`
+  // The range [size-4MiB, size) starts 10 chars into the title line.
+  const tail = `{"type":"user","p":"${'x'.repeat(4 * MiB - (rec.length - 10) - 22)}"}\n`
+  const text = `${'{"type":"user"}\n'.repeat(100)}${rec}${tail}`
+  expect(await sessionTitle(fake(text))).toBe('edge')
 })

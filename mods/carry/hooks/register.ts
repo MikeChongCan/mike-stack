@@ -69,6 +69,50 @@ export function buildPrompt(path: string, budget: number, total: number): string
     `Continue where we left off. Start with a short summary of the state.`
 }
 
+// `/rename` writes a top-level `{"type":"custom-title","customTitle":"…",…}` line to the transcript.
+// Only whole top-level lines count: the same keys nested in a tool's input are not a rename.
+// Returns the last one in `text` ('' when it is blank); a cut line at a range edge fails to parse and is skipped.
+export function lastTitle(text: string): string | undefined {
+  const lines = text.split('\n')
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const line = lines[i] ?? ''
+    if (!line.includes('"custom-title"')) continue
+    try {
+      const rec: unknown = JSON.parse(line)
+      if (typeof rec !== 'object' || rec === null) continue
+      const { type, customTitle } = rec as { type?: unknown; customTitle?: unknown }
+      // The last record wins, a blank one too: '' then means "no name".
+      if (type === 'custom-title' && typeof customTitle === 'string') return customTitle.trim()
+    } catch {
+      // Not a whole JSON line.
+    }
+  }
+  return undefined
+}
+
+const CHUNK = 4 * 1024 * 1024 // one read's cap
+const OVERLAP = 64 * 1024 // a title line is far smaller, so one cut at an edge is whole in the next range
+
+// The session name set by /rename: read the transcript backward in ranges, stop at the first found.
+export async function sessionTitle($: EngineInterface): Promise<string | undefined> {
+  try {
+    const { transcriptPath } = await $.session.info()
+    if (!transcriptPath || !(await $.fs.exists(transcriptPath))) return undefined
+    const { size } = await $.fs.stat(transcriptPath)
+    let end = size
+    while (end > 0) {
+      const start = Math.max(0, end - CHUNK)
+      const title = lastTitle(await $.fs.read(transcriptPath, { offset: start, length: end - start }))
+      if (title !== undefined) return title || undefined
+      if (start === 0) break
+      end = start + OVERLAP
+    }
+    return undefined
+  } catch {
+    return undefined
+  }
+}
+
 async function carry($: EngineInterface, args: string) {
   const { lines, note } = parseArgs(args)
   // Windows sets USERPROFILE, not HOME (only its sshd sets HOME).
@@ -94,7 +138,16 @@ async function carry($: EngineInterface, args: string) {
     // Over 4 MiB or unreadable: the prompt then works without a line count.
   }
 
+  // /clear starts a new session without the name, so read it first and give it back after.
+  const title = await sessionTitle($)
   await $.command.run({ command: 'clear' })
+  if (title) {
+    try {
+      await $.command.run({ command: 'rename', args: title })
+    } catch (err) {
+      $.ui.log(`carry: /rename ${title} failed: ${String(err)}`)
+    }
+  }
   const text = buildPrompt(path, lines, total) + (note ? `\n\n${note}` : '')
   await $.prompt.submit({ text, asUser: true })
 }
